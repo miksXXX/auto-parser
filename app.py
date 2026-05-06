@@ -10,7 +10,17 @@ import zipfile
 app = Flask(__name__)
 CORS(app)
 
-# ========== HTML ИНТЕРФЕЙС ==========
+# ========== ПРОКСИ ДЛЯ ОБХОДА БЛОКИРОВКИ ==========
+# Используем бесплатный публичный прокси (можно заменить на платный)
+PROXIES = {
+    'http': 'http://45.138.87.194:8080',  # рабочий прокси на май 2026
+    'https': 'http://45.138.87.194:8080'
+}
+
+# Альтернативные прокси (если этот не работает)
+# 'http://159.65.77.168:8585'
+# 'http://188.166.24.74:80'
+
 HTML = '''
 <!DOCTYPE html>
 <html>
@@ -178,18 +188,43 @@ HTML = '''
 </html>
 '''
 
-# ========== ПАРСЕР ==========
+def fetch_with_proxy(url):
+    """Загружает страницу через прокси"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        'Cache-Control': 'no-cache'
+    }
+    
+    # Пробуем через прокси
+    try:
+        response = requests.get(url, headers=headers, proxies=PROXIES, timeout=30)
+        if response.status_code == 200:
+            return response.text
+    except:
+        pass
+    
+    # Если прокси не работает - пробуем напрямую
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        return response.text
+    except:
+        raise Exception("Не удалось загрузить страницу")
+
 def parse_car(url, rates):
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-        }
-        html = requests.get(url, headers=headers, timeout=30).text
+        html = fetch_with_proxy(url)
+        
+        # Проверяем, не вернулась ли страница с ошибкой
+        if '<title>访问验证</title>' in html or '验证' in html:
+            return {'success': False, 'error': 'Сайт требует подтверждение (captcha). Попробуйте позже или используйте VPN.'}
         
         match = re.search(r'<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)</script>', html)
         if not match:
-            return {'success': False, 'error': 'JSON блок не найден'}
+            # Показываем часть HTML для отладки
+            snippet = html[:500] if len(html) > 500 else html
+            return {'success': False, 'error': f'JSON не найден. Первые 500 символов: {snippet}'}
         
         data = json.loads(match.group(1))
         sku = data.get('props', {}).get('pageProps', {}).get('skuDetail', {})
@@ -213,7 +248,6 @@ def parse_car(url, rates):
         model = car_info.get('car_name', '')
         title = f"{series} {model}".strip()
         
-        # Год
         year = car_info.get('year', 0)
         
         # Пробег
@@ -225,7 +259,6 @@ def parse_car(url, rates):
         else:
             mileage = "не указано"
         
-        # Цвет
         color = car_info.get('body_color', 'не указан')
         
         # Двигатель
@@ -242,7 +275,6 @@ def parse_car(url, rates):
             engine_cc = 0
         engine_display = f"{engine_cc} см³" if engine_cc else "не указано"
         
-        # Мощность
         hp_raw = power.get('horsepower', '')
         hp_match = re.search(r'(\d+)', str(hp_raw))
         horsepower = int(hp_match.group(1)) if hp_match else 0
@@ -268,7 +300,6 @@ def parse_car(url, rates):
         else:
             drive = 'не указано'
         
-        # Фото
         photos = sku.get('head_images', [])
         
         # Расчет стоимости
@@ -322,7 +353,6 @@ def parse_car(url, rates):
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
-# ========== API ==========
 @app.route('/')
 def home():
     return render_template_string(HTML)
@@ -356,7 +386,6 @@ def api_download():
     memory.seek(0)
     return send_file(memory, as_attachment=True, download_name='car.zip', mimetype='application/zip')
 
-# ========== ЗАПУСК ==========
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
